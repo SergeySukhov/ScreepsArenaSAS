@@ -1,9 +1,19 @@
 import { createConstructionSite, findClosestByPath, getCpuTime, getObjectsByPrototype, getTerrainAt, getTicks } from 'game/utils';
 import { ConstructionSite, Creep, OwnedStructure, Source, Structure, StructureContainer, StructureExtension, StructureRampart, StructureSpawn } from 'game/prototypes';
-import { MOVE, RANGED_ATTACK, TOUGH, ERR_NOT_IN_RANGE, ATTACK, HEAL, WORK, CARRY, RESOURCE_ENERGY, OK, TERRAIN_PLAIN } from 'game/constants';
+import { MOVE, RANGED_ATTACK, TOUGH, ERR_NOT_IN_RANGE, ATTACK, HEAL, WORK, CARRY, RESOURCE_ENERGY, OK, TERRAIN_PLAIN, TERRAIN_SWAMP, TERRAIN_WALL } from 'game/constants';
 import { CostMatrix } from 'game/path-finder';
 
 // :\s{1}\(?[A-Z]+[a-zA-Z]+(\[\])*\s*(\|\s*[A-Z]+[A-Za-z]*\)?\s*(\[\])*)*
+
+export class CreepRole {
+    static RANGER = 1;
+    static WORKER = 2;
+    static GUARD = 3;
+    static HEALER = 4;
+    static HUNTER = 5;
+    static CARRY = 6;
+    static MEGAHAULER = 7;
+}
 
 let allExtentedCreeps: ExtenedCreep[] = [];
 let availableExtentedCreeps: ExtenedCreep[] = [];
@@ -70,16 +80,20 @@ export function loop() {
 
     const inj = recoveryCreeps.filter(x => x.creep?.exists && !isRecovered(x.creep));
     recoveryCreeps = allExtentedCreeps.filter(x => isNeedRecovery(x.creep));
-    console.log("!! | loop | recoveryCreeps:", recoveryCreeps.length)
     recoveryCreeps.push(...inj.filter(x => !recoveryCreeps.find(xx => xx.creep.id === x.creep.id)));
-    console.log("!! | loop | recoveryCreeps:", recoveryCreeps)
     availbleExtentedHealthyCreeps = allExtentedCreeps.filter(creep => !recoveryCreeps.find(xx => creep.creep.id === xx.creep.id));
 
     if (tick === 1) {
+        for(let y = 0; y < 100; y++) {
+            for(let x = 0; x < 100; x++) {
+                matrix.set(x, y, getPositionPathWeight(x, y));
+            }
+        }
         resGroup = new ResourceGroup();
         guardGroup = new GuardGroup();
         hunterGroup = new HunterGroup();
         rangerGroups.push(new RangerGroup());
+
     }
     consoleCpu();
 
@@ -109,7 +123,7 @@ export function loop() {
     backToHeal();
     consoleCpu();
 
-    spwn(mySpawn);
+    Spawn.spawnTick();
     consoleCpu();
 
     hunterGroup.groupTick();
@@ -127,6 +141,13 @@ export function loop() {
 
     
     consoleCpu();
+}
+
+export function getPositionPathWeight(x, y) {
+    let tile = getTerrainAt({x, y});
+     return tile === TERRAIN_WALL  ? 255 : // wall  => unwalkable
+            tile === TERRAIN_SWAMP ?   5 : // swamp => weight:  5
+                                       1 ; // plain => weight:  1
 }
 
 export function handleRangerGroup() {
@@ -156,8 +177,10 @@ export function checkSide() {
     if (!enemyCreeps.length) return;
     const enemy = mySpawn.findClosestByRange(enemyCreeps)
     const range = enemy.getRangeTo(mySpawn);
-    if (range < 15) {
+    if (range < 5) {
         attackSide = enemy.y >= mySpawn.y ? 1 : -1;
+    } else {
+        attackSide = isNorthBlocked ? 1 : -1;
     }
 }
 
@@ -166,13 +189,15 @@ export function checkPathFromBaseBlocked() {
     isSouthBlocked = false;
     if (!enemyCreeps.length) return;
     const closestEnemy = mySpawn.findClosestByRange(enemyCreeps);
-    for(let y = 6; y < 20; y++) {
+    for(let y = 5; y < 20; y++) {
         if (isNorthBlocked && isNorthBlocked) break;
-        let range = closestEnemy.getRangeTo({x: mySpawn.x, y: mySpawn.y + y });
+        let range = Math.min(closestEnemy.getRangeTo({x: mySpawn.x - 2, y: mySpawn.y + y }), closestEnemy.getRangeTo({x: mySpawn.x + 2, y: mySpawn.y + y }), ) ;
+        
         if (range < 7) {
             isNorthBlocked = true;
         }
-        range = closestEnemy.getRangeTo({x: mySpawn.x, y: mySpawn.y - y });
+        range = Math.min(closestEnemy.getRangeTo({x: mySpawn.x - 2, y: mySpawn.y - y }), closestEnemy.getRangeTo({x: mySpawn.x + 2, y: mySpawn.y - y }), ) ;
+
         if (range < 7) {
             isSouthBlocked = true;
         }
@@ -181,19 +206,17 @@ export function checkPathFromBaseBlocked() {
     if (isNorthBlocked || isSouthBlocked)
     for(let x = -8; x < 10; x++) {
         if (isNorthBlocked) {
-            matrix.set(mySpawn.x + x, mySpawn.y + 30, 10);
+            matrix.set(mySpawn.x + x, mySpawn.y + 30, 1000);
         } else {
-            matrix.set(mySpawn.x + x, mySpawn.y + 30, 0);
+            matrix.set(mySpawn.x + x, mySpawn.y + 30, getPositionPathWeight(mySpawn.x + x, mySpawn.y + 30));
         }
         if (isSouthBlocked) {
-            matrix.set(mySpawn.x + x, mySpawn.y - 30, 10);
+            matrix.set(mySpawn.x + x, mySpawn.y - 30, 1000);
         } else {
-            matrix.set(mySpawn.x + x, mySpawn.y - 30, 0);
+            matrix.set(mySpawn.x + x, mySpawn.y - 30, getPositionPathWeight(mySpawn.x + x, mySpawn.y - 30));
         }
     } 
 }
-
-
 
 export function isNeedRecovery(creep: Creep) {
     if (!creep?.exists) return false;
@@ -201,7 +224,7 @@ export function isNeedRecovery(creep: Creep) {
 }
 
 export function isRecovered(creep: Creep) {
-    return (creep.hits > creep.hits - 100) && (creep.hits > creep.hitsMax / 2 + 50);
+    return (creep.hits > creep.hits - 10);
 }
 
 export function handleHealer() {
@@ -215,149 +238,13 @@ export function handleHealer() {
         } 
         if (closestInjAlly) {
             if (healerCreep.heal(closestInjAlly) !== OK) {
-                healerCreep.moveTo(closestInjAlly);
+                healerCreep.moveTo(closestInjAlly, {costMatrix: matrix});
             }
         } else {
             let closestAlly = healerCreep.findClosestByRange(rangedAttackCreeps);
-            healerCreep.moveTo(closestAlly);
+            healerCreep.moveTo(closestAlly, {costMatrix: matrix});
         }
         healIfCan(healerCreep);
-    }
-}
-
-export function spwn(mySpawn: StructureSpawn) {
-    if (!mySpawn.spawning) {
-        let creep: Creep;
-
-        // WORKER
-        if (carryCreeps.length > 1 && workerCreeps.length < 2 && tick < 1000) {
-            creep = mySpawn.spawnCreep([
-                WORK,
-                WORK,
-                CARRY,
-                CARRY,
-                MOVE, MOVE,
-                MOVE, MOVE, 
-                MOVE, MOVE, 
-            ]).object;
-            if (creep) {
-                allExtentedCreeps.push({
-                    creep: creep,
-                    role:CreepRole.WORKER,
-                });
-            }
-            return;
-        } 
-
-         // MEGAHAULER
-         if (carryCreeps.length > 1 && haulerCreeps.length < 2 && tick < 800) {
-            creep = mySpawn.spawnCreep([
-                CARRY, CARRY,
-                CARRY, CARRY,
-                CARRY, CARRY,
-                CARRY, CARRY,
-                CARRY, CARRY,
-                MOVE, MOVE,
-                MOVE, MOVE,
-                MOVE, MOVE,
-                MOVE, MOVE, 
-                MOVE, MOVE, 
-            ]).object;
-            if (creep) {
-                allExtentedCreeps.push({
-                    creep: creep,
-                    role:CreepRole.MEGAHAULER,
-                });
-            }
-            return;
-        } 
-
-        // CARRY
-        if (carryCreeps.length < 3 && tick < 1200) {
-            creep = mySpawn.spawnCreep([
-                CARRY, 
-                MOVE,
-                MOVE,
-            ]).object;
-            if (creep) {
-                allExtentedCreeps.push({
-                    creep: creep,
-                    role:CreepRole.CARRY,
-                });
-            }
-            return;
-        } 
-
-        
-        // HUNTER
-        if (hunterCreeps.length < 2) {
-            creep = mySpawn.spawnCreep([
-                ATTACK, ATTACK,
-                MOVE, MOVE,
-                MOVE, MOVE,
-                MOVE, 
-            ]).object;
-            if (creep) {
-                allExtentedCreeps.push({
-                    creep: creep,
-                    role:CreepRole.HUNTER,
-                });
-            }
-            return;
-        } 
-
-        // GUARD
-        if (guardCreeps.length < 3) {
-            creep = mySpawn.spawnCreep([
-                MOVE,
-                RANGED_ATTACK,
-                RANGED_ATTACK,
-                RANGED_ATTACK,
-                RANGED_ATTACK,
-                HEAL,
-            ]).object;
-            if (creep) {
-                allExtentedCreeps.push({
-                    creep: creep,
-                    role:CreepRole.GUARD,
-                });
-            }
-            return;
-        }
-        // HEAL
-        // if (rangedAttackCreeps.length > 2 && healerCreeps.length < 2) {
-        //     creep = mySpawn.spawnCreep([
-        //         HEAL, HEAL,
-        //         MOVE, MOVE
-        //     ]).object;
-        //     if (creep) {
-        //         allExtentedCreeps.push({
-        //             creep: creep,
-        //             role:CreepRole.HEALER,
-        //         });
-        //     }
-        //     return;
-        // }
-
-        // RANGED
-        if (guardCreeps.length > 2) {
-
-            creep = mySpawn.spawnCreep([
-                RANGED_ATTACK, 
-                RANGED_ATTACK,
-                RANGED_ATTACK,
-                MOVE, MOVE,
-                MOVE, MOVE,
-                MOVE, MOVE,
-            ]).object;
-            if (creep) {
-                allExtentedCreeps.push({
-                    creep: creep,
-                    role:CreepRole.RANGER,
-                });
-            }
-        }
-
     }
 }
 
@@ -366,8 +253,8 @@ export function backToHeal() {
     for(let extCreep of recoveryCreeps) {
         const creep = extCreep.creep;
         if (creep.getRangeTo(mySpawn) > 1) {
-            if(creep.moveTo({x: mySpawn.x, y: mySpawn.y - attackSide}) !== OK) {
-                creep.moveTo({x: mySpawn.x - 1, y: mySpawn.y - attackSide})
+            if(creep.moveTo({x: mySpawn.x, y: mySpawn.y - attackSide}, {costMatrix: matrix}) !== OK) {
+                creep.moveTo({x: mySpawn.x - 1, y: mySpawn.y - attackSide}, {costMatrix: matrix})
             }
         }
         attackIfCan(creep);
@@ -382,8 +269,8 @@ export function fallBack(creep: Creep, range = 2) {
     if (closestEns) {
         if (creep.getRangeTo(closestEns) <= range) {
             wasRetreat = true;
-            if(creep.moveTo({x: mySpawn.x, y: mySpawn.y - attackSide * range - attackSide}) !== OK) {
-                creep.moveTo({x: mySpawn.x - 1, y: mySpawn.y - attackSide})
+            if(creep.moveTo({x: mySpawn.x, y: mySpawn.y - attackSide * range - attackSide}, {costMatrix: matrix}) !== OK) {
+                creep.moveTo({x: mySpawn.x - 1, y: mySpawn.y - attackSide}, {costMatrix: matrix})
             }
         }
     }
@@ -472,7 +359,7 @@ export class HunterGroup {
             return;
         } 
         if (hCreep.attack(this.huntersAim) !== OK) {
-            hCreep.moveTo(this.huntersAim);
+            hCreep.moveTo(this.huntersAim, {costMatrix: matrix});
         }
     }
 
@@ -497,7 +384,7 @@ export class HunterGroup {
         if (!this.huntersAim) {
             const conteiner = getObjectsByPrototype(StructureContainer)?.filter(x => x.getRangeTo(enemySpawn) > 6);
             if (conteiner.length) {
-                this.huntersAim = enemySpawn.findClosestByPath(conteiner);
+                this.huntersAim = enemySpawn.findClosestByPath(conteiner, { costMatrix: matrix });
             }
         }
     }
@@ -533,7 +420,7 @@ export class GuardGroup {
 
     handleGuard(creep: Creep, guardNum) {
         const newPos = { x: mySpawn.x + guardNum, y: mySpawn.y + attackSide };
-        creep.moveTo(newPos);      
+        creep.moveTo(newPos, {costMatrix: matrix});      
 
         if(!attackIfCan(creep)) {
             healIfCan(creep);
@@ -612,9 +499,9 @@ export class ResourceGroup {
 
         if (workerCreeps.length) {
             if (this.extensionSites.length) {
-                this.closestSite = workerCreeps[0].findClosestByRange(this.extensionSites);
+                this.closestSite = workerCreeps[0].findClosestByPath(this.extensionSites, { costMatrix: matrix });
             } else if (this.rampartSites.length) {
-                this.closestSite = mySpawn.findClosestByPath(this.rampartSites)
+                this.closestSite = mySpawn.findClosestByRange(this.rampartSites)
             } else {
                 this.closestSite = undefined;
             }
@@ -666,14 +553,14 @@ export class ResourceGroup {
         }
         // path enemy location
         let source = getObjectsByPrototype(StructureContainer).filter(s => s.exists && s.store.getUsedCapacity(RESOURCE_ENERGY) > 0);
-        const newNotHomeSource = (this.closestStoreWithResourse ?? mySpawn)?.findClosestByPath(source);
+        const newNotHomeSource = (this.closestStoreWithResourse ?? mySpawn)?.findClosestByPath(source, { costMatrix: matrix });
         return newNotHomeSource;
     }
 
     setNewTargetSource() {
         let myExt = getObjectsByPrototype(StructureExtension).filter(s => s.my && s.store.getFreeCapacity(RESOURCE_ENERGY) > 0);
         if (this.closestStoreWithResourse && myExt?.length) {
-            this.closestTargetStore =  this.closestStoreWithResourse.findClosestByPath(myExt);
+            this.closestTargetStore =  this.closestStoreWithResourse.findClosestByPath(myExt, { costMatrix: matrix });
         } else {
             this.closestTargetStore = mySpawn;
         }
@@ -702,7 +589,7 @@ export class ResourceGroup {
         if (creep.store.getUsedCapacity(RESOURCE_ENERGY) < 10) {
             const closestStoreWithResourse = this.getClosestSource(creep);
             if(closestStoreWithResourse && creep.withdraw(closestStoreWithResourse, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-                creep.moveTo(closestStoreWithResourse);
+                creep.moveTo(closestStoreWithResourse, {costMatrix: matrix});
             }
             return;
         }
@@ -710,17 +597,15 @@ export class ResourceGroup {
         if (this.rampartSites.length > 0) {
             
             if (creep.build(this.closestSite) === ERR_NOT_IN_RANGE) {
-                creep.moveTo(this.closestSite);
+                creep.moveTo(this.closestSite, {costMatrix: matrix});
             }
-            this.moveFromPosition(creep, this.closestSite);
             return;
         }
 
         if (this.extensionSites.length > 0) {
             if (creep.build(this.closestSite) === ERR_NOT_IN_RANGE) {
-                creep.moveTo(this.closestSite);
+                creep.moveTo(this.closestSite, {costMatrix: matrix});
             }
-            this.moveFromPosition(creep, this.closestSite);
             return;
         }
 
@@ -731,15 +616,15 @@ export class ResourceGroup {
          if(creep.store.getUsedCapacity(RESOURCE_ENERGY) < 10) {
             const closestStoreWithResourse = this.getClosestSource(creep);
             if(closestStoreWithResourse && creep.withdraw(closestStoreWithResourse, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
-                creep.moveTo(closestStoreWithResourse);
+                creep.moveTo(closestStoreWithResourse, {costMatrix: matrix});
             }
         } else {
             const allSources = getObjectsByPrototype(StructureExtension)
             .filter(s => s.exists && s.store.getFreeCapacity(RESOURCE_ENERGY) > 0);
     
-            const closestTarget = creep.findClosestByPath([...allSources, mySpawn]);
+            const closestTarget = creep.findClosestByPath([...allSources, mySpawn], { costMatrix: matrix });
             if(creep.transfer(closestTarget, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
-                creep.moveTo(closestTarget);
+                creep.moveTo(closestTarget, {costMatrix: matrix});
             }
         }
     }
@@ -756,15 +641,15 @@ export class ResourceGroup {
             if (!allSources.length) {
                 return;
             }
-            const closestStoreWithResourse = creep.findClosestByPath(allSources);
+            const closestStoreWithResourse = creep.findClosestByPath(allSources, { costMatrix: matrix });
 
             if(closestStoreWithResourse && creep.withdraw(closestStoreWithResourse, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
-                creep.moveTo(closestStoreWithResourse);
+                creep.moveTo(closestStoreWithResourse, {costMatrix: matrix});
             }
             
         } else {
             if(creep.transfer(mySpawn, RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
-                creep.moveTo(mySpawn);
+                creep.moveTo(mySpawn, {costMatrix: matrix});
             }
         }
     }
@@ -780,18 +665,9 @@ export class ResourceGroup {
             allSources = allSources.filter(x => x.findClosestByRange(enemyCreeps).getRangeTo(x) > 8);
         }
         if (allSources.length) {
-            return creep.findClosestByPath(allSources);
+            return creep.findClosestByPath(allSources, { costMatrix: matrix });
         } else {
             return undefined;
-        }
-    }
-
-    moveFromPosition(creep: Creep, pos) {
-        if (!pos || !creep){
-            return;
-        }
-        if (creep.x === pos.x && creep.y === pos.y) {
-            creep.moveTo(mySpawn);
         }
     }
 }
@@ -905,15 +781,16 @@ export class RangerGroup {
             return;
         }
         if (this.groupState === GroupState.ATTACK) {
-          this.leader.moveTo(enemySpawn)
+          this.leader.moveTo(enemySpawn, {costMatrix: matrix})
         }
+        
         if (this.groupState === GroupState.WAITING) {
            if (this.leader && this.rangers.length && !this.rangers.find(x => x.getRangeTo(this.leader) > this.rangeForWaiting)) {
                 this.groupState = GroupState.ATTACK;
            }
         }
         if (this.groupState === GroupState.RETREAT) {
-          this.leader.moveTo(mySpawn);
+          this.leader.moveTo(mySpawn, {costMatrix: matrix});
         }
        
 
@@ -921,11 +798,7 @@ export class RangerGroup {
 
     handleRanger(creep: Creep) {
         if (this.groupState === GroupState.INIT) {
-            if (mySpawn.x < 10) {
-                creep.moveTo({x: mySpawn.x + 5, y: mySpawn.y})
-            } else {
-                creep.moveTo({x: mySpawn.x - 5, y: mySpawn.y})
-            }
+            creep.moveTo({x: mySpawn.x + (mySpawn.x < 10 ? 5 : -5), y: mySpawn.y}, {costMatrix: matrix});
         }
         if (this.groupState === GroupState.ATTACK) {
             if (creep.id === this.leader.id) return;
@@ -933,7 +806,7 @@ export class RangerGroup {
             attackIfCan(creep);
 
             if (this.leader?.exists) {
-                creep.moveTo(this.leader);
+                creep.moveTo(this.leader, {costMatrix: matrix});
                 if (creep.getRangeTo(this.leader) > this.rangeForWaiting) {
                     this.groupState = GroupState.WAITING;
                 }
@@ -943,14 +816,14 @@ export class RangerGroup {
             attackIfCan(creep);
 
             if (this.leader?.exists) {
-                creep.moveTo(this.leader);
+                creep.moveTo(this.leader, {costMatrix: matrix});
             } else {
 
             }
         }
         if (this.groupState === GroupState.RETREAT) {
             attackIfCan(creep);
-            creep.moveTo(mySpawn);
+            creep.moveTo(mySpawn, {costMatrix: matrix});
         }
        
 
@@ -974,6 +847,120 @@ export class RangerGroup {
     }
 }
 
+export class Spawn {
+    static spawnQueue = [
+        CreepRole.CARRY,
+        CreepRole.WORKER,
+        CreepRole.CARRY,
+        CreepRole.GUARD,
+        CreepRole.WORKER,
+        CreepRole.MEGAHAULER,
+        CreepRole.GUARD,
+        CreepRole.GUARD,
+        CreepRole.MEGAHAULER,
+
+    ];
+
+    static spawnTick() {
+        if (!mySpawn.spawning) {
+            const nextCreep = this.spawnQueue.shift();
+            if (!this.spawn(nextCreep)) {
+                this.spawnQueue.unshift(nextCreep);
+            }
+        }
+    }
+
+    static spawn(creepRole) {
+        let role = creepRole;
+        let creep: Creep;
+        switch(creepRole) {
+            case CreepRole.CARRY:
+                creep = mySpawn.spawnCreep([
+                    CARRY, 
+                    CARRY, 
+                    MOVE,
+                ]).object;
+            break;
+            case CreepRole.GUARD:
+                creep = mySpawn.spawnCreep([
+                    MOVE,
+                    RANGED_ATTACK,
+                    RANGED_ATTACK,
+                    RANGED_ATTACK,
+                    RANGED_ATTACK,
+                    HEAL,
+                ]).object;
+            break;
+            case CreepRole.HEALER:
+                
+            break;
+            case CreepRole.HUNTER:
+                creep = mySpawn.spawnCreep([
+                    ATTACK, ATTACK,
+                    MOVE, MOVE,
+                    MOVE, MOVE,
+                    MOVE, 
+                ]).object;
+            break;
+            case CreepRole.MEGAHAULER:
+                creep = mySpawn.spawnCreep([
+                    CARRY, CARRY,
+                    CARRY, CARRY,
+                    CARRY, CARRY,
+                    CARRY, CARRY,
+                    CARRY, CARRY,
+                    CARRY, CARRY,
+                    CARRY, CARRY,
+                    CARRY, CARRY,
+                    CARRY, CARRY,
+                    MOVE, MOVE, 
+                ]).object;
+            break;
+            case CreepRole.RANGER:
+                creep = mySpawn.spawnCreep([
+                    RANGED_ATTACK, 
+                    RANGED_ATTACK,
+                    RANGED_ATTACK,
+                    MOVE, MOVE,
+                    MOVE, MOVE,
+                    MOVE, MOVE,
+                ]).object;
+            break;
+            case CreepRole.WORKER:
+                creep = mySpawn.spawnCreep([
+                    WORK,
+                    WORK,
+                    CARRY,
+                    CARRY,
+                    MOVE, MOVE,
+                    MOVE, MOVE,
+                    MOVE, MOVE, 
+                    MOVE, MOVE, 
+                ]).object;
+            break;
+            default:
+                role = CreepRole.RANGER;
+                creep = mySpawn.spawnCreep([
+                    RANGED_ATTACK, 
+                    RANGED_ATTACK,
+                    RANGED_ATTACK,
+                    MOVE, MOVE,
+                    MOVE, MOVE,
+                    MOVE, MOVE,
+                ]).object;
+            break;
+        }
+        if (creep) {
+            allExtentedCreeps.push({
+                creep: creep,
+                role,
+            });
+            return true;
+        }
+        return false;
+    }
+}
+
 export class GroupState {
     static INIT = 1;
     static ATTACK = 2;
@@ -985,14 +972,4 @@ export class GroupState {
 export class ExtenedCreep {
     creep: Creep;
     role: Number;
-}
-
-export class CreepRole {
-    static RANGER = 1;
-    static WORKER = 2;
-    static GUARD = 3;
-    static HEALER = 4;
-    static HUNTER = 5;
-    static CARRY = 6;
-    static MEGAHAULER = 7;
 }
