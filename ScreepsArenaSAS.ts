@@ -18,6 +18,7 @@ let healerCreeps: Creep[] = [];
 let workerCreeps: Creep[] = [];
 let carryCreeps: Creep[] = [];
 let hunterCreeps: Creep[] = [];
+let haulerCreeps: Creep[] = [];
 
 let recoveryCreeps: ExtenedCreep[] = [];
 
@@ -40,7 +41,9 @@ let isSouthBlocked = false;
 let tick = 0;
 let consoleTickCount = 0;
 export function loop() {
-    // TODO: опорные точки для отступления, крип для вражеской базы с измененой траекторией, суперхаулер*
+    // TODO: опорные точки для отступления, крип для вражеской базы с измененой траекторией, 
+    // ранние охотники на базу и к ресурсам
+    // новый способ трансфера
     tick = getTicks();
     consoleTickCount = 0;
 
@@ -67,7 +70,9 @@ export function loop() {
 
     const inj = recoveryCreeps.filter(x => x.creep?.exists && !isRecovered(x.creep));
     recoveryCreeps = allExtentedCreeps.filter(x => isNeedRecovery(x.creep));
+    console.log("!! | loop | recoveryCreeps:", recoveryCreeps.length)
     recoveryCreeps.push(...inj.filter(x => !recoveryCreeps.find(xx => xx.creep.id === x.creep.id)));
+    console.log("!! | loop | recoveryCreeps:", recoveryCreeps)
     availbleExtentedHealthyCreeps = allExtentedCreeps.filter(creep => !recoveryCreeps.find(xx => creep.creep.id === xx.creep.id));
 
     if (tick === 1) {
@@ -85,6 +90,7 @@ export function loop() {
     workerCreeps = [];
     healerCreeps = [];
     carryCreeps= [];
+    haulerCreeps= [];
 
     for (const extCreep of availbleExtentedHealthyCreeps) {
 
@@ -94,6 +100,7 @@ export function loop() {
         if (extCreep.role === CreepRole.WORKER) workerCreeps.push(extCreep.creep);
         if (extCreep.role === CreepRole.HEALER) healerCreeps.push(extCreep.creep);
         if (extCreep.role === CreepRole.CARRY) carryCreeps.push(extCreep.creep);
+        if (extCreep.role === CreepRole.MEGAHAULER) haulerCreeps.push(extCreep.creep);
     }
 
     checkSide();
@@ -174,12 +181,12 @@ export function checkPathFromBaseBlocked() {
     if (isNorthBlocked || isSouthBlocked)
     for(let x = -8; x < 10; x++) {
         if (isNorthBlocked) {
-            matrix.set(mySpawn.x + x, mySpawn.y + 30, 10000);
+            matrix.set(mySpawn.x + x, mySpawn.y + 30, 10);
         } else {
             matrix.set(mySpawn.x + x, mySpawn.y + 30, 0);
         }
         if (isSouthBlocked) {
-            matrix.set(mySpawn.x + x, mySpawn.y - 30, 10000);
+            matrix.set(mySpawn.x + x, mySpawn.y - 30, 10);
         } else {
             matrix.set(mySpawn.x + x, mySpawn.y - 30, 0);
         }
@@ -190,7 +197,7 @@ export function checkPathFromBaseBlocked() {
 
 export function isNeedRecovery(creep: Creep) {
     if (!creep?.exists) return false;
-    return (creep.hits < creep.hitsMax / 2 + 50) || creep.hits < 90 || !creep.body.find(x => x.type !== MOVE);
+    return !creep.body.find(x => x.type !== MOVE && x.hits > 0);
 }
 
 export function isRecovered(creep: Creep) {
@@ -223,7 +230,7 @@ export function spwn(mySpawn: StructureSpawn) {
         let creep: Creep;
 
         // WORKER
-        if (carryCreeps.length > 1 &&  workerCreeps.length < 2 && tick < 800) {
+        if (carryCreeps.length > 1 && workerCreeps.length < 2 && tick < 1000) {
             creep = mySpawn.spawnCreep([
                 WORK,
                 WORK,
@@ -243,7 +250,7 @@ export function spwn(mySpawn: StructureSpawn) {
         } 
 
          // MEGAHAULER
-         if (carryCreeps.length > 1 &&  workerCreeps.length > 1 && !resGroup?.megaHauler && tick < 800) {
+         if (carryCreeps.length > 1 && haulerCreeps.length < 2 && tick < 800) {
             creep = mySpawn.spawnCreep([
                 CARRY, CARRY,
                 CARRY, CARRY,
@@ -358,14 +365,13 @@ export function backToHeal() {
     if (!recoveryCreeps.length) return;
     for(let extCreep of recoveryCreeps) {
         const creep = extCreep.creep;
-        attackIfCan(creep);
-        healIfCan(creep);
         if (creep.getRangeTo(mySpawn) > 1) {
-            if(creep.moveTo({x: mySpawn.x, y: mySpawn.y - attackSide * 2}) !== OK) {
+            if(creep.moveTo({x: mySpawn.x, y: mySpawn.y - attackSide}) !== OK) {
                 creep.moveTo({x: mySpawn.x - 1, y: mySpawn.y - attackSide})
             }
-            
         }
+        attackIfCan(creep);
+        healIfCan(creep);
     }
 }
 
@@ -455,7 +461,7 @@ export class HunterGroup {
         this.findHunterAim();
 
         for(const hunter of this.hunters) {
-            if (fallBack(hunter, 6)) continue;
+            if (fallBack(hunter, 5)) continue;
             this.handleCreep(hunter);
         }
     }
@@ -543,7 +549,7 @@ export class ResourceGroup {
 
     workers: Creep[] = [];
     
-    megaHauler: Creep;
+    haulers: Creep[] = [];
 
     homeStores: StructureContainer[] = [];
     closestStoreWithResourse: StructureContainer;
@@ -571,8 +577,7 @@ export class ResourceGroup {
         
         this.carries = this.carries.filter(x => x?.exists && !isNeedRecovery(x));
         this.workers = this.workers.filter(x => x?.exists && !isNeedRecovery(x));
-        this.megaHauler = isNeedRecovery(this.megaHauler) ? undefined : this.megaHauler;
-
+        this.haulers = this.haulers.filter(x => x?.exists && !isNeedRecovery(x));
 
         if (!this.rampartSites.length) {
             let store = getObjectsByPrototype(StructureContainer).filter(s => s.store.getUsedCapacity(RESOURCE_ENERGY) > 0 && s.getRangeTo(mySpawn) > 6)
@@ -598,7 +603,12 @@ export class ResourceGroup {
             }
         }
 
-        this.megaHauler = availbleExtentedHealthyCreeps.find(creep => creep.role === CreepRole.MEGAHAULER)?.creep;
+        if (availbleExtentedHealthyCreeps.length > 0) {
+            const newCreep = availbleExtentedHealthyCreeps.find(x => x.role === CreepRole.MEGAHAULER && !this.haulers.find(xx => xx.id === x.creep.id));
+            if (newCreep) {
+                this.haulers.push(newCreep.creep);
+            }
+        }
 
         if (workerCreeps.length) {
             if (this.extensionSites.length) {
@@ -619,18 +629,18 @@ export class ResourceGroup {
         
         for(const creep of this.workers) {
             if (fallBack(creep, 6)) continue;
-            if (this.closestSite && tick < 1100) {
+            if (this.closestSite && tick < 1500) {
                 this.handleWorker(creep);
             } else {
                 this.handleCarry(creep)
             }
         }
 
-        if (this.megaHauler) {
-            if (fallBack(this.megaHauler, 6)) {
+        for(const creep of this.haulers) {
+            if (fallBack(creep, 6)) {
 
             } else {
-                this.handleHauler();
+                this.handleHaulers(creep);
             }
         }
     }
@@ -671,7 +681,7 @@ export class ResourceGroup {
 
     locateExtensionAroundResource(source: StructureContainer) {
         let isOk = false;
-        if (!source?.exists || getObjectsByPrototype(StructureExtension).filter(x => x.my).length > 4) {
+        if (!source?.exists || getObjectsByPrototype(StructureExtension).filter(x => x.my).length > 4 || this.extensionSites.length > 8) {
             return false;
         }
         for(let x = 0; x <= 1; x++) 
@@ -734,7 +744,7 @@ export class ResourceGroup {
         }
     }
 
-    handleHauler(creep: Creep = this.megaHauler) {
+    handleHaulers(creep: Creep) {
         if(creep.store.getUsedCapacity(RESOURCE_ENERGY) < 10) {
             let allSources = getObjectsByPrototype(StructureContainer);
             
@@ -761,8 +771,8 @@ export class ResourceGroup {
 
     getClosestSource(creep: Creep) {
         let allSources = getObjectsByPrototype(StructureContainer);
-        if (this.megaHauler && this.megaHauler.id !== creep.id) {
-            allSources.push(this.megaHauler)
+        if (this.haulers?.length && !this.haulers.find(x => x.id === creep.id)) {
+            allSources.push(...this.haulers)
         }
         allSources = allSources.filter(s => s?.exists && s.store.getUsedCapacity(RESOURCE_ENERGY) > 0);
 
@@ -800,9 +810,13 @@ export class RangerGroup {
         // console.log("!! | leader:", this.leader?.id)
         // console.log("!! | groupState:", this.groupState)
         // console.log("!! | rangers:", this.rangers.length)
+        this.rangers = this.rangers.filter(x => !isNeedRecovery(x));
+
+        if (isNeedRecovery(this.leader)) {
+            this.leader = this.rangers.length ? this.rangers[0] : undefined;
+        }
         this.handleLeader();
 
-        this.rangers = this.rangers.filter(x => !isNeedRecovery(x));
 
         for(const creep of this.rangers) {
             const fallBackRange = getTerrainAt({x: creep.x, y: creep.y}) === TERRAIN_PLAIN ? 2 : 3;
@@ -880,6 +894,10 @@ export class RangerGroup {
 
     handleLeader() {
         if (!this.leader?.exists) {
+            return;
+        }
+        if (fallBack(this.leader, 3)) {
+            attackIfCan(this.leader)
             return;
         }
         attackIfCan(this.leader)
